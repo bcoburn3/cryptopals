@@ -50,7 +50,6 @@ by  -  byte
 	    (while (>= i 1))
 	    (with res = #())
 	    (after-each (push (mod i 256) res))
-	    (after-each (print i))
 	    (finally (return (nreverse res)))))
 
 (defun bv-from-s (s)
@@ -544,17 +543,21 @@ by  -  byte
 
 ;This is also easy:  just send a long repeated string as input, check for repeats in the output
 
+(defmacro with-cbc-keys ((sym-iv sym-key) &body body)
+  `(let ((,sym-iv (bv-rand 16))
+	 (,sym-key (bv-rand 16)))
+     ,@body))
+
 (defun ch11-oracle (bv-msg)
   (let ((bv-pre-pad (bv-rand (+ 5 (random 6))))
 	(bv-post-pad (bv-rand (+ 5 (random 6)))))
-    (let ((bv-iv (bv-rand 16))
-	  (bv-key (bv-rand 16))
-	  (bv-padded (concatenate 'vector bv-pre-pad bv-msg bv-post-pad)))
-      (if (= (random 2) 0)
-	  (progn (print "cbc")
-		 (bv-aes-cbc-encrypt bv-padded bv-iv bv-key))
-	  (progn (print "ecb")
-		 (bv-aes-encrypt bv-padded bv-key))))))
+    (with-cbc-keys (bv-iv bv-key)
+      (let ((bv-padded (concatenate 'vector bv-pre-pad bv-msg bv-post-pad)))
+	(if (= (random 2) 0)
+	    (progn (print "cbc")
+		   (bv-aes-cbc-encrypt bv-padded bv-iv bv-key))
+	    (progn (print "ecb")
+		   (bv-aes-encrypt bv-padded bv-key)))))))
 
 (defun ?-duplicate-blocks (blocks)
   (some (lm (x) (= x 0)) (map-pairs #'fl-bit-distance blocks)))
@@ -695,16 +698,15 @@ by  -  byte
     (search";admin=true;" s-ptext)))
 
 (defun ch16-crack ()
-  (let* ((bv-userdata (bv-make 16 65))
-	 (bv-iv (bv-rand 16))
-	 (bv-key (bv-rand 16))
-	 (bv-ctext (ch16-encrypt (s-from-bv bv-userdata) bv-iv bv-key))
-	 (bv-target (bv-from-s "a;admin=true;aaa"))
-	 (bv-edit (bv-xor (bv-xor bv-userdata bv-target) (subseq bv-ctext 16 32))))
-    (ch16-check bv-ctext bv-iv bv-key)
-    (ch16-check (concatenate 'vector (subseq bv-ctext 0 16) bv-edit (subseq bv-ctext 32))
-		bv-iv
-		bv-key)))
+  (with-cbc-keys (bv-iv bv-key)
+    (let* ((bv-userdata (bv-make 16 65))
+	   (bv-ctext (ch16-encrypt (s-from-bv bv-userdata) bv-iv bv-key))
+	   (bv-target (bv-from-s "a;admin=true;aaa"))
+	   (bv-edit (bv-xor (bv-xor bv-userdata bv-target) (subseq bv-ctext 16 32))))
+      (ch16-check bv-ctext bv-iv bv-key)
+      (ch16-check (concatenate 'vector (subseq bv-ctext 0 16) bv-edit (subseq bv-ctext 32))
+		  bv-iv
+		  bv-key))))
 
 (ok (ch16-crack) "Challenge 16")
   
@@ -733,3 +735,33 @@ by  -  byte
 	t
 	'nil)))
 
+(defun ch17-crack ()
+  (with-cbc-keys (bv-iv bv-key)
+    (let ((blocks (subdivide (ch17-encrypt bv-iv bv-key) 16)))
+      (iterate (for bv-cur-block in blocks)
+	       (for bv-cur-iv previous bv-cur-block initially bv-iv)
+	       (collecting (bv-cbc-padding-block bv-cur-block bv-cur-iv bv-key)
+			   into lst-res)
+	       (finally (return (s-from-bv (bv-pkcs7-unpad (apply #'concatenate 'vector lst-res) 16))))))))
+
+(defun bv-cbc-padding-block (bv-block bv-iv bv-key)
+  (iterate (for i from 1 to 16)
+	   (with bv-mask-suffix = #())
+	   (for by-cur =
+		(iterate (for n from 0 to 255)
+			 (for bv-xor-mask = (concatenate 'vector 
+							 (bv-make (- 16 i) 0)
+							 #(n)
+							 bv-mask-suffix))
+			 (until (ch17-oracle (concatenate 'vector bv-xor-mask bv-block)
+					     bv-iv
+					     bv-key))
+			 (finally (return (logxor n i (elt bv-iv (- 16 i)))))))
+	   (collecting by-cur into bv-res at beginning result-type 'vector)
+	   (after-each (setf bv-mask-suffix (bv-xor (bv-xor (subseq bv-iv (- 16 i))
+							    bv-res)
+						    (bv-make i (+ i 1)))))
+	   (finally (return bv-res))))
+
+(eval-when (:execute)
+  (print (ch17-crack)))
