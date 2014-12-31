@@ -46,11 +46,12 @@ by  -  byte
   (concatenate 'vector (bv-make (- padded-len (length bv))) bv))
 
 (defun bv-from-in (in)
-   (loop for i = in then (/ (- i (mod i 256)) 256)
-       while (>= i 1)
-       with res = #()
-       do (push (mod i 256) res)
-       finally (return (nreverse res))))
+   (iterate (for i first in then (/ (- i (mod i 256)) 256))
+	    (while (>= i 1))
+	    (with res = #())
+	    (after-each (push (mod i 256) res))
+	    (after-each (print i))
+	    (finally (return (nreverse res)))))
 
 (defun bv-from-s (s)
   (map-to 'vector #'char-code s))
@@ -146,14 +147,14 @@ by  -  byte
   (let ((len-pad (mod-remainder (length bv) 3)))
     (let ((in-padded (in-from-bv (concatenate 'vector bv (bv-make len-pad))))
 	  (s-padding (s-from-bv (bv-make len-pad 61))))
-	(loop for offset in '(0 6 12 18)
-	   for cur-bits = (ldb (byte 6 offset) in-padded)
-	   collecting (b64c-from-6bits cur-bits) into l-res
-	   finally (return (concatenate 'string
-					(subseq (s-from-seq (nreverse l-res))
-						0
-						(- 4 len-pad))
-					s-padding))))))
+	(iterate (for offset in '(0 6 12 18))
+		 (for cur-bits = (ldb (byte 6 offset) in-padded))
+		 (collecting (b64c-from-6bits cur-bits) into l-res)
+		 (finally (return (concatenate 'string
+					       (subseq (s-from-seq (nreverse l-res))
+						       0
+						       (- 4 len-pad))
+					       s-padding)))))))
 
 (defun b64-from-bv (bv)
   (s-from-seq (map #'b64-from-3bytes (subdivide bv 3))))
@@ -329,10 +330,10 @@ by  -  byte
 (defun map-pairs (fn seq)
   ;todo:  make this a generic function or something, so that the output type matches the
   ;       input type, instead of always outputing a list
-  (loop repeat (- (length seq) 1)
-     for elem = (first seq) then (first rest)
-     for rest = (subseq seq 1) then (subseq rest 1)
-     appending (map-to 'list (lm (x) (funcall fn x elem)) rest)))
+  (iterate (repeat (- (length seq) 1))
+	   (for elem first (first seq) then (first rest))
+	   (for rest first (subseq seq 1) then (subseq rest 1))
+	   (appending (map-to 'list (lm (x) (funcall fn x elem)) rest))))
 
 (is (map-pairs #'+ '(1 2 3 4)) '(3 4 5 5 6 7))
 (is (map-pairs #'+ #(1 2 3 4)) '(3 4 5 5 6 7))
@@ -501,7 +502,7 @@ by  -  byte
   (let* ((bv-padded (bv-pkcs7-pad bv-msg 16))
 	 (blocks (subdivide bv-padded 16))
 	 (res (iterate (for next in blocks)
-		       (for prev previous ctext initially bv-iv)
+		       (for prev previous ctext first bv-iv)
 		       (for ctext = (bv-aes-encrypt (bv-xor prev next) bv-key))
 		       (collecting ctext))))
     (apply #'concatenate 'vector res)))
@@ -509,7 +510,7 @@ by  -  byte
 (defun bv-aes-cbc-decrypt (bv-msg bv-iv bv-key)
   (let* ((blocks (subdivide bv-msg 16))
 	 (res (iterate (for next in blocks)
-		       (for prev previous next initially bv-iv)
+		       (for prev previous next first bv-iv)
 		       (collecting (bv-xor (bv-aes-decrypt next bv-key) prev)))))
     (bv-pkcs7-unpad (apply #'concatenate 'vector res) 16)))
 
@@ -582,7 +583,7 @@ by  -  byte
     (iterate (for i upfrom 1)
 	     (for cb-offset = (- 16 (mod i 16)))
 	     (for bv-offset = (bv-make cb-offset))
-	     (for bv-prefix initially (bv-make 15) then (concatenate 'vector (subseq bv-prefix 1) (vector by-res)))
+	     (for bv-prefix first (bv-make 15) then (concatenate 'vector (subseq bv-prefix 1) (vector by-res)))
 	     (for by-res = (iterate (for i from 0 to 255)
 				    (for bv-msg = (concatenate 'vector bv-prefix (vector i) bv-offset)) 
 				    (for bv-oracle-output = (ch12-oracle bv-msg))
@@ -660,7 +661,7 @@ by  -  byte
     (iterate (for i upfrom 1)
 	     (for cb-offset = (- 16 (mod i 16)))
 	     (for bv-offset = (bv-make cb-offset))
-	     (for bv-prefix initially (bv-make (+ cb-prefix-len 15)) then (concatenate 'vector (subseq bv-prefix 1) (vector by-res)))
+	     (for bv-prefix first (bv-make (+ cb-prefix-len 15)) then (concatenate 'vector (subseq bv-prefix 1) (vector by-res)))
 	     (for by-res = (iterate (for i from 0 to 255)
 				    (for bv-msg = (concatenate 'vector bv-prefix (vector i) bv-offset)) 
 				    (for bv-oracle-output = (ch14-oracle bv-msg))
@@ -707,4 +708,28 @@ by  -  byte
 
 (ok (ch16-crack) "Challenge 16")
   
+
+;problems from set 3
+
+;17. CBC padding oracle
+
+(defun ch17-encrypt (bv-iv bv-key)
+  (let ((lst-secrets (list "MDAwMDAwTm93IHRoYXQgdGhlIHBhcnR5IGlzIGp1bXBpbmc="
+			   "MDAwMDAxV2l0aCB0aGUgYmFzcyBraWNrZWQgaW4gYW5kIHRoZSBWZWdhJ3MgYXJlIHB1bXBpbic="
+			   "MDAwMDAyUXVpY2sgdG8gdGhlIHBvaW50LCB0byB0aGUgcG9pbnQsIG5vIGZha2luZw=="
+			   "MDAwMDAzQ29va2luZyBNQydzIGxpa2UgYSBwb3VuZCBvZiBiYWNvbg=="
+			   "MDAwMDA0QnVybmluZyAnZW0sIGlmIHlvdSBhaW4ndCBxdWljayBhbmQgbmltYmxl"
+			   "MDAwMDA1SSBnbyBjcmF6eSB3aGVuIEkgaGVhciBhIGN5bWJhbA=="
+			   "MDAwMDA2QW5kIGEgaGlnaCBoYXQgd2l0aCBhIHNvdXBlZCB1cCB0ZW1wbw=="
+			   "MDAwMDA3SSdtIG9uIGEgcm9sbCwgaXQncyB0aW1lIHRvIGdvIHNvbG8="
+			   "MDAwMDA4b2xsaW4nIGluIG15IGZpdmUgcG9pbnQgb2g="
+			   "MDAwMDA5aXRoIG15IHJhZy10b3AgZG93biBzbyBteSBoYWlyIGNhbiBibG93")))
+    (let ((bv-secret (bv-from-b64 (elt lst-secrets (random (length lst-secrets))))))
+      (bv-aes-cbc-encrypt bv-secret bv-iv bv-key))))
+
+(defun ch17-oracle (bv-msg bv-iv bv-key)
+  (let ((res (bv-aes-cbc-decrypt bv-msg bv-iv bv-key)))
+    (if res
+	t
+	'nil)))
 
