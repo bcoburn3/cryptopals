@@ -379,14 +379,14 @@ by  -  byte
 
 (defun bv-find-repeat-key (bv-cipher)
  (let* ((block-lens (map #'car (lst-xor-block-size bv-cipher 50)))
-	(transposes (map (lm (x) (lst-block-transpose bv-cipher x)) block-lens)))
-    (let* ((lst-keys (map (lm (transpose) (map-to 'vector (lm (bv) (elt (xor-crack bv *frequency-table*) 1))
-						 transpose))
-			  transposes))
-	   (lst-bvs (map (lm (key) (repeated-key-xor bv-cipher key))
-			 lst-keys)))
-      (car (sort lst-bvs (lm (bv1 bv2) (< (fl-frequency-compare (ft-from-bv bv1) *frequency-table*)
-					  (fl-frequency-compare (ft-from-bv bv2) *frequency-table*))))))))
+	(lst-transposes (map (lm (x) (lst-block-transpose bv-cipher x)) block-lens)))
+  (let* ((lst-keys (map (lm (transpose) (map-to 'vector (lm (bv) (elt (xor-crack bv *frequency-table*) 1))
+						transpose))
+			lst-transposes))
+	 (lst-bvs (map (lm (key) (repeated-key-xor bv-cipher key))
+		       lst-keys)))
+    (car (sort lst-bvs (lm (bv1 bv2) (< (fl-frequency-compare (ft-from-bv bv1) *frequency-table*)
+					(fl-frequency-compare (ft-from-bv bv2) *frequency-table*))))))))
 
 (defun s-file-find-repeat-key (filename)
   (s-from-bv (bv-find-repeat-key (bv-from-b64-file filename))))
@@ -771,3 +771,175 @@ by  -  byte
 
 (eval-when (:execute)
   (print (ch17-crack)))
+
+
+;18. Implement CTR, the stream cipher mode
+
+(defun bv-aes-ctr-encrypt (bv-msg bv-nonce bv-key)
+  (print (length bv-key))
+  (iterate (for i from 0 to (ceiling (length bv-msg) 16))
+	   (for bv-counter = (bv-from-in i))
+	   (for bv-nonce-counter = (bv-cat bv-nonce
+					   bv-counter
+					   (bv-make (- 8 (length bv-counter)))))
+	   (collecting (bv-aes-encrypt bv-nonce-counter bv-key) into lst-res)
+	   (finally (return (bv-xor bv-msg (apply #'bv-cat lst-res))))))
+
+(defun s-aes-ctr-encrypt (s-msg s-nonce s-key)
+  (let ((bv-msg (bv-from-s s-msg))
+	(bv-nonce (bv-from-s s-nonce))
+	(bv-key (bv-from-s s-key)))
+    (s-from-bv (bv-aes-ctr-encrypt bv-msg bv-nonce bv-key))))
+
+(is (s-aes-ctr-encrypt (s-from-b64 "L77na/nrFsKvynd6HzOoG7GHTLXsTVu9qvY/2syLXzhPweyyMTJULu/6/kXX0KSvoOLSFQ==")
+			  (s-from-bv (bv-make 8 0))
+			  "YELLOW SUBMARINE")
+    "Yo, VIP Let's kick it Ice, Ice, baby Ice, Ice, baby ")
+
+
+;19. Break fixed-nonce CTR mode using substitions
+
+;I'm skipping this challenge because it's explicitly not meant to be automated, the solution
+;would be an Excel file
+
+
+;20. Break fixed-nonce CTR statistically
+
+;this is almost the same problem as challenge 6.  In particular, if one truncates each
+;ciphertext to the length of the shortest ciphertext, and then concatenates everything,
+;this is exactly the same as #6.
+
+(defun ch20-crack (file-name)
+  (let ((lst-ctexts (butlast (map #'bv-from-b64 (split #\Newline (read-file-into-string file-name))))))
+    (let* ((min-len (apply #'min (map #'length lst-ctexts)))
+	   (lst-truncated (map (lm (vec) (subseq vec 0 min-len)) lst-ctexts)))
+      (subdivide (s-from-bv (bv-find-repeat-key (apply #'concatenate 'vector lst-truncated)))
+		 min-len))))
+
+(eval-when (:execute)
+  (print (ch20-crack "/home/adminuser/20.txt")))
+
+
+;21. Implement the MT19937 Mersenne Twister RNG
+
+(defun MT-init (seed)
+  ;returns a closure
+  (let ((u32v-state (make-array 624 :element-type '(unsigned-byte 32)))
+	(u32-and-mask (- (expt 2 32) 1)))
+    (iterate (for i from 0 to 623)
+	     (for u32-cur first seed then
+		  (logand u32-and-mask 
+			  (+ (* 1812433253 
+				(logxor u32-cur 
+					(ash u32-cur 30)))
+			     i)))
+	     (after-each (setf (elt u32v-state i) u32-cur)))
+    (MT-extract-closure u32v-state)))
+
+(defun MT-extract-closure (u32v-state)
+    (let ((index 0))
+      (lambda ()
+	;this is the extract number function from the Wikipedia entry for the Mersenne Twister
+	(if (= index 0)
+	    (setf u32v-state (u32v-MT-generate-array u32v-state)))
+	(let ((u32-res (u32-MT-temper (elt u32v-state index))))
+	  (setf index (mod (+ index 1) 624))
+	  u32-res))))
+
+(defun u32v-MT-generate-array (u32v-state)
+  (iterate (for i from 0 to 623)
+	   (for y = (+ (ldb (byte 1 31) (elt u32v-state i))
+		       (ldb (byte 31 0) (elt u32v-state (mod (+ i 1) 624)))))
+	   (after-each (setf (elt u32v-state i) (logxor (elt u32v-state (mod (+ i 397) 624))
+							(ash y -1))))
+	   (after-each (if (oddp y)
+			   (setf (elt u32v-state i) (logxor (elt u32v-state i) 2567483615))))
+	   (finally (return u32v-state))))
+
+(defun u32-MT-temper (u32)
+  (setf u32 (logxor u32 (ash u32 -11))
+	u32 (logxor u32 (logand (ash u32 7) 2636928640))
+	u32 (logxor u32 (logand (ash u32 15) 4022730752))
+	u32 (logxor u32 (ash u32 -18)))
+  u32)
+
+(is (funcall (MT-init 1))
+    2724652974)
+
+
+;22. Crack an MT19937 seed
+
+(defun ch22-seed ()
+  (print "ch22 seed")
+  (sleep (+ 40 (random 960)))
+  (let ((rng (MT-init (get-universal-time))))
+    (sleep (+ 40 (random 960)))
+    (list (funcall rng) (funcall rng))))
+
+(defun ch22-crack (u32)
+  (iterate (for i downfrom (get-universal-time))
+	   (for rng = (MT-init i))
+	   (until (= (funcall rng)
+		     u32))
+	   (finally (return rng))))
+
+(eval-when (:execute)
+  (let* ((lst (ch22-seed))
+	 (first (car lst))
+	 (second (cadr lst))
+	 (rng (ch22-crack first)))
+    (is (funcall rng)
+	second)))
+
+
+;23. Clone an MT19937 RNG from its output
+
+(defun u32-un-right-shift (u32 shift)
+  (iterate (for i from 31 downto 0)
+	   (for bit = (ldb (byte 1 i) u32))
+	   (with u32-res = 0)
+	   (after-each (if (> i (- 32 shift))
+			   (setf u32-res (dpb bit (byte 1 i) u32-res))
+			   (setf u32-res (dpb (logxor bit 
+						  (ldb (byte 1 (+ i shift)) u32-res))
+					      (byte 1 i)
+					      u32-res))))
+	   (finally (return u32-res))))
+
+(defun u32-un-left-shift (u32 shift u32-magic-num)
+  (iterate (for i from 0 to 31)
+	   (for bit = (ldb (byte 1 i) u32))
+	   (with u32-res = 0)
+	   (after-each (if (< i shift)
+			   (setf u32-res (dpb bit (byte 1 i) u32-res))
+			   (setf u32-res (dpb (logxor bit 
+						  (logand (ldb (byte 1 (- i shift)) u32-res) 
+							  (ldb (byte 1 i) u32-magic-num))) 
+					  (byte 1 i) 
+					  u32-res))))
+	   (finally (return u32-res))))
+
+(defun u32-MT-untemper (u32)
+  (setf u32 (u32-un-right-shift u32 18)
+	u32 (u32-un-left-shift u32 15 4022730752)
+	u32 (u32-un-left-shift u32 7 2636928640)
+	u32 (u32-un-right-shift u32 11))
+  u32)
+
+(let ((u32 (random (expt 2 32))))
+  (is (logxor (u32-MT-untemper (u32-MT-temper u32))
+	      u32)
+      0))
+
+(defun MT-clone (u32v-input)
+  (let ((u32v-state (iterate (for u32-cur in-vector u32v-input)
+			     (collecting (u32-MT-untemper u32-cur) result-type 'vector))))
+    (MT-extract-closure u32v-state)))
+
+(let ((orig-MT (MT-init (random (expt 2 32)))))
+  (let* ((u32v-output (iterate (repeat 624)
+			       (for u32-cur = (funcall orig-MT))
+			       (collecting u32-cur result-type 'vector)))
+	 (clone-MT (MT-clone u32v-output)))
+    (is (funcall clone-MT)
+	(funcall orig-MT))))
