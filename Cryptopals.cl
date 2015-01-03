@@ -238,7 +238,7 @@ by  -  byte
 (defvar *frequency-table* #H(#\! 1/3101 #\1 1/3101 #\0 1/3101 #\. 2/3101 #\5 1/3101 #\z 3/3101 #\q 2/3101 #\j 13/3101 #\- 2/3101 #\x 4/3101 #\u 62/3101 #\? 3/3101 #\f 29/3101 #\m 66/3101 #\w 6/443 #\d 11/443 #\n 137/3101 #\h 109/3101 #\g 51/3101 #\r 78/3101 #\a 204/3101 #\b 76/3101 #\c 107/3101 #\k 47/3101 #\s 110/3101 #\' 33/3101 #\t 173/3101 #\e 257/3101 #\l 151/3101 #\Newline 110/3101 #\p 47/3101 #\i 207/3101 #\v 36/3101 #\  526/3101 #\, 72/3101 #\o 179/3101 #\y 82/3101))
 |#
 
-(defun ft-from-string (s)
+(defun ft-from-s (s)
   (let ((ft #H()))
     (doeach (chr s)
       (inc-hash ft (char-downcase chr)))
@@ -246,10 +246,10 @@ by  -  byte
 
 (defun ft-from-file (file)
   (let ((s (read-file-into-string file)))
-    (ft-from-string s)))
+    (ft-from-s s)))
 
 (defun ft-from-bv (bv)
-  (ft-from-string (s-from-bv bv)))
+  (ft-from-s (s-from-bv bv)))
 
 (defun inc-hash (table key)
   (let ((?-exists (nth-value 1 (getf table key))))
@@ -273,15 +273,15 @@ by  -  byte
 (defun bv-xor-with-byte (bv by)
   (map (lm (x) (logxor x by)) bv))
 
-(defun xor-crack (bv-ciphertext ft-ref)
-  (let ((res (list "default result" 0 1000)))
-    (doeach (x (iota 256) res)
-      (let ((cand (fl-frequency-compare (ft-from-bv (bv-xor-with-byte bv-ciphertext x))
-					ft-ref)))
-	(if (< cand (nth res 2))
-	    (setf res (list (s-from-bv (bv-xor-with-byte bv-ciphertext x)) x cand)))))))
+(defun xor-crack (bv-ctext ft-ref)
+  (iterate (for i from 0 to 255)
+	   (for bv-cand = (bv-xor-with-byte bv-ctext i))
+	   (finding i minimizing (fl-frequency-compare (ft-from-bv bv-cand) ft-ref)
+		    into by-key)
+	   (finally (return (values (s-from-bv (bv-xor-with-byte bv-ctext by-key)) 
+				    by-key)))))
 
-(is (nth (xor-crack (bv-from-hs "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736") *frequency-table*) 0)
+(is (xor-crack (bv-from-hs "1b37373331363f78151b7f2b783431333d78397828372d363c78373e783a393b3736") *frequency-table*)
     "Cooking MC's like a pound of bacon")
 
 ;4. Detect single-character XOR
@@ -290,15 +290,13 @@ by  -  byte
   (let ((s-file (read-file-into-string file-name)))
     (split #\newline s-file)))
 
-(defun xor-find-crack (slist-cipher ft-ref)
-  (let ((res (list "default result" 0 1000)) ;must match the layout of the output from xor-crack above
-	(slist-plain (map (lm (x) (xor-crack (bv-from-hs x) ft-ref)) slist-cipher)))
-    (doeach (x slist-plain res)
-      (if (< (nth x 2) (nth res 2))
-		 (setf res x)))))
+(defun xor-find-crack (hslist-cipher ft-ref)
+  (iterate (for hs-ctext in hslist-cipher)
+	   (for s-ptext = (xor-crack (bv-from-hs hs-ctext) ft-ref))
+	   (finding s-ptext minimizing (fl-frequency-compare (ft-from-s s-ptext) ft-ref))))
 
 (defun file-xor-find-crack (file-name ft-ref)
-  (nth (xor-find-crack (slist-from-file file-name) ft-ref) 0))
+  (xor-find-crack (slist-from-file file-name) ft-ref))
 
 (ok (equalp (file-xor-find-crack "/home/adminuser/4.txt" *frequency-table*) 
 	    "Now that the party is jumping\n")
@@ -306,11 +304,11 @@ by  -  byte
 
 ;5. Repeating-key XOR Cipher
 
-(defun repeated-key-xor (bv-plain bv-key)
-  (let ((bv-split (subdivide bv-plain (length bv-key))))
+(defun bv-repeated-key-xor (bv-ptext bv-key)
+  (let ((bv-split (subdivide bv-ptext (length bv-key))))
     (apply #'append (map-to 'list (lm (x) (bv-xor x bv-key)) bv-split))))
 
-(is (hs-from-bv (repeated-key-xor (bv-from-s "Burning 'em, if you ain't quick and nimble I go crazy when I hear a cymbal")
+(is (hs-from-bv (bv-repeated-key-xor (bv-from-s "Burning 'em, if you ain't quick and nimble I go crazy when I hear a cymbal")
 				  (bv-from-s "ICE")))
     "0b3637272a2b2e63622c2e69692a23693a2a3c6324202d623d63343c2a26226324272765272a282b2f20690a652e2c652a3124333a653e2b2027630c692b20283165286326302e27282f")
 
@@ -354,45 +352,30 @@ by  -  byte
 
 (is (n-choose-r 6 2) 15)
 
-(defun lst-xor-block-size (bv-cipher max-size)
-  (let ((lens (iota max-size :start 1)))
-    (let ((cands (map (lm (x) (xor-block-size-helper bv-cipher x))
-		      lens)))
-      (take 15 (sort cands (lm (pair1 pair2) (< (cdr pair1) (cdr pair2))))))))
-  
-(defun xor-block-size-helper (bv-cipher len)
-  (let ((blocks (subdivide bv-cipher len)))
-    (cons len
-	  (/ (reduce #'+ (map-pairs #'fl-bit-distance blocks))
-	     (n-choose-r (length blocks) 2)))))
+(defun in-xor-block-size (bv-ctext max-size)
+  (iterate (for i from 1 to max-size)
+	   (for blocks = (subdivide bv-ctext i))
+	   (finding i minimizing (/ (reduce #'+ (map-pairs #'fl-bit-distance blocks))
+				    (n-choose-r (length blocks) 2)))))
 	
 (defun lst-block-transpose (bv block-len)
-  (let ((res '())
-	(blocks (subdivide bv block-len)))
-    (doeach (i (iota block-len) res)
-      (push (map-to 'vector (lm (x) (if (< i (length x)) (elt x i) 0)) blocks) res))
-    (nreverse res)))
+  (iterate (with blocks = (subdivide bv block-len))
+	   (for i from 0 to (- block-len 1))
+	   (collecting (map-to 'vector (lm (x) (if (< i (length x)) (elt x i) 0)) blocks))))
 
 (ok (equalp (lst-block-transpose #(1 2 3 4 5 6 7 8) 2) 
 	    (list (vector 1 3 5 7) (vector 2 4 6 8)))
     "lst-block-transpose")
 
-(defun bv-find-repeat-key (bv-cipher)
- (let* ((block-lens (map #'car (lst-xor-block-size bv-cipher 50)))
-	(lst-transposes (map (lm (x) (lst-block-transpose bv-cipher x)) block-lens)))
-  (let* ((lst-keys (map (lm (transpose) (map-to 'vector (lm (bv) (elt (xor-crack bv *frequency-table*) 1))
-						transpose))
-			lst-transposes))
-	 (lst-bvs (map (lm (key) (repeated-key-xor bv-cipher key))
-		       lst-keys)))
-    (car (sort lst-bvs (lm (bv1 bv2) (< (fl-frequency-compare (ft-from-bv bv1) *frequency-table*)
-					(fl-frequency-compare (ft-from-bv bv2) *frequency-table*))))))))
+(defun bv-find-repeat-key (bv-ctext)
+ (let* ((block-len (in-xor-block-size bv-ctext 50))
+	(lst-transpose (lst-block-transpose bv-ctext block-len))
+	(bv-key (map-to 'vector (lm (bv) (nth-value 1 (xor-crack bv *frequency-table*)))
+			 lst-transpose)))
+   (bv-repeated-key-xor bv-ctext bv-key)))
 
 (defun s-file-find-repeat-key (filename)
   (s-from-bv (bv-find-repeat-key (bv-from-b64-file filename))))
-
-(eval-when (:execute)
-  (print (s-file-find-repeat-key "c:\\temp\\xor.txt")))
 
 (eval-when (:execute)
   (print (s-file-find-repeat-key "/home/adminuser/6.txt")))
@@ -979,3 +962,4 @@ by  -  byte
 (multiple-value-bind (bv-ctext u32-key) (ch24-encrypt)
   (is (ch24-crack bv-ctext)
       u32-key))
+
