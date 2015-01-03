@@ -45,7 +45,7 @@ by  -  byte
 (defun bv-pad (bv padded-len)
   (concatenate 'vector (bv-make (- padded-len (length bv))) bv))
 
-(defun bv-cat (&rest args)
+(defun v-cat (&rest args)
   (apply #'concatenate 'vector args))
 
 (defun bv-from-in (in)
@@ -150,7 +150,7 @@ by  -  byte
 
 (defun b64-from-3bytes (bv)
   (let ((len-pad (mod-remainder (length bv) 3)))
-    (let ((in-padded (in-from-bv (bv-cat bv (bv-make len-pad))))
+    (let ((in-padded (in-from-bv (v-cat bv (bv-make len-pad))))
 	  (s-padding (s-from-bv (bv-make len-pad 61))))
 	(iterate (for offset in '(0 6 12 18))
 		 (for cur-bits = (ldb (byte 6 offset) in-padded))
@@ -449,7 +449,7 @@ by  -  byte
 	(res #()))
     (doeach (blocks lst-blocks res)
       (if (not (= (reduce #'+ (map-pairs #'fl-bit-distance blocks)) 0))
-	  (setf res (apply #'bv-cat blocks))))))
+	  (setf res (apply #'v-cat blocks))))))
 
 (defun bv-file-find-duplicate-blocks (file-name cb-len)
   (let* ((lst-hs (split #\newline (read-file-into-string file-name)))
@@ -467,7 +467,7 @@ by  -  byte
 (defun bv-pkcs7-pad (bv cb-block-len)
   ;gives a full block of padding for even multiples of the block length
   (let ((cb-padding-len (- cb-block-len (mod (length bv) cb-block-len))))
-    (bv-cat bv (make-array cb-padding-len :initial-element cb-padding-len))))
+    (v-cat bv (make-array cb-padding-len :initial-element cb-padding-len))))
 
 (ok (equalp (bv-pkcs7-pad (bv-from-s "YELLOW SUBMARINE") 20) 
 	    #(89 69 76 76 79 87 32 83 85 66 77 65 82 73 78 69 4 4 4 4))
@@ -510,14 +510,14 @@ by  -  byte
 		       (for prev previous ctext initially bv-iv)
 		       (for ctext = (bv-aes-encrypt (bv-xor prev next) bv-key))
 		       (collecting ctext))))
-    (apply #'bv-cat res)))
+    (apply #'v-cat res)))
 
 (defun bv-aes-cbc-decrypt (bv-msg bv-iv bv-key)
   (let* ((blocks (subdivide bv-msg 16))
 	 (res (iterate (for next in blocks)
 		       (for prev previous next initially bv-iv)
 		       (collecting (bv-xor (bv-aes-decrypt next bv-key) prev)))))
-    (bv-pkcs7-unpad (apply #'bv-cat res) 16)))
+    (bv-pkcs7-unpad (apply #'v-cat res) 16)))
 
 (defun bv-file-aes-cbc-encrypt (file-name bv-iv bv-key)
   (let ((bv-msg (bv-from-b64-file file-name)))
@@ -558,7 +558,7 @@ by  -  byte
   (let ((bv-pre-pad (bv-rand (+ 5 (random 6))))
 	(bv-post-pad (bv-rand (+ 5 (random 6)))))
     (with-cbc-keys (bv-iv bv-key)
-      (let ((bv-padded (bv-cat bv-pre-pad bv-msg bv-post-pad)))
+      (let ((bv-padded (v-cat bv-pre-pad bv-msg bv-post-pad)))
 	(if (= (random 2) 0)
 	    (progn (print "cbc")
 		   (bv-aes-cbc-encrypt bv-padded bv-iv bv-key))
@@ -585,16 +585,16 @@ by  -  byte
   (let ((bv-post-pad (bv-rand (+ 5 (random 6))))
 	(bv-secret (bv-from-b64 "Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkgaGFpciBjYW4gYmxvdwpUaGUgZ2lybGllcyBvbiBzdGFuZGJ5IHdhdmluZyBqdXN0IHRvIHNheSBoaQpEaWQgeW91IHN0b3A/IE5vLCBJIGp1c3QgZHJvdmUgYnkK"))
 	(bv-key (bv-rand 16)))
-    (bv-aes-encrypt (bv-pkcs7-pad (bv-cat bv-msg bv-secret bv-post-pad) 16) bv-key)))
+    (bv-aes-encrypt (bv-pkcs7-pad (v-cat bv-msg bv-secret bv-post-pad) 16) bv-key)))
 
 (defun ch12-crack ()
   (let ((bv-res #()))
     (iterate (for i upfrom 1)
 	     (for cb-offset = (- 16 (mod i 16)))
 	     (for bv-offset = (bv-make cb-offset))
-	     (for bv-prefix first (bv-make 15) then (bv-cat (subseq bv-prefix 1) (vector by-res)))
+	     (for bv-prefix first (bv-make 15) then (v-cat (subseq bv-prefix 1) (vector by-res)))
 	     (for by-res = (iterate (for i from 0 to 255)
-				    (for bv-msg = (bv-cat bv-prefix (vector i) bv-offset)) 
+				    (for bv-msg = (v-cat bv-prefix (vector i) bv-offset)) 
 				    (for bv-oracle-output = (ch12-oracle bv-msg))
 				    (until (?-duplicate-blocks (subdivide bv-oracle-output 16)))
 				    (finally (return i))))
@@ -640,7 +640,7 @@ by  -  byte
     (let ((bv-padding (last (subdivide (ch13-enc-profile "fo@ba.com" bv-key) 16))) ;encryption of 16 16's
 	  (bv-email (subseq (ch13-enc-profile "bcobu@foo.com" bv-key) 0 32))
 	  (bv-admin (elt (subdivide (ch13-enc-profile "foo@bar.coadmin" bv-key) 16) 1)))
-      (ch13-test (bv-cat bv-email bv-admin bv-padding) bv-key))))
+      (ch13-test (v-cat bv-email bv-admin bv-padding) bv-key))))
 
 (is (ch13-crack)
     "victory")
@@ -656,11 +656,11 @@ by  -  byte
 	(bv-post-pad (bv-rand (+ 5 (random 6))))
 	(bv-secret (bv-from-b64 "Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkgaGFpciBjYW4gYmxvdwpUaGUgZ2lybGllcyBvbiBzdGFuZGJ5IHdhdmluZyBqdXN0IHRvIHNheSBoaQpEaWQgeW91IHN0b3A/IE5vLCBJIGp1c3QgZHJvdmUgYnkK"))
 	(bv-key (bv-rand 16)))
-    (bv-aes-encrypt (bv-pkcs7-pad (bv-cat bv-pre-pad bv-msg bv-secret bv-post-pad) 16) bv-key)))
+    (bv-aes-encrypt (bv-pkcs7-pad (v-cat bv-pre-pad bv-msg bv-secret bv-post-pad) 16) bv-key)))
 
 (defun ch14-prefix-len ()
   (iterate (for i from 0 to 16)
-	   (for bv-oracle-output = (ch14-oracle (bv-cat (bv-rand i) (bv-make 32))))
+	   (for bv-oracle-output = (ch14-oracle (v-cat (bv-rand i) (bv-make 32))))
 	   (until (?-duplicate-blocks (subdivide bv-oracle-output 16)))
 	   (finally (return i))))
 
@@ -670,9 +670,9 @@ by  -  byte
     (iterate (for i upfrom 1)
 	     (for cb-offset = (- 16 (mod i 16)))
 	     (for bv-offset = (bv-make cb-offset))
-	     (for bv-prefix first (bv-make (+ cb-prefix-len 15)) then (bv-cat (subseq bv-prefix 1) (vector by-res)))
+	     (for bv-prefix first (bv-make (+ cb-prefix-len 15)) then (v-cat (subseq bv-prefix 1) (vector by-res)))
 	     (for by-res = (iterate (for i from 0 to 255)
-				    (for bv-msg = (bv-cat bv-prefix (vector i) bv-offset)) 
+				    (for bv-msg = (v-cat bv-prefix (vector i) bv-offset)) 
 				    (for bv-oracle-output = (ch14-oracle bv-msg))
 				    (until (?-duplicate-blocks (subdivide bv-oracle-output 16)))
 				    (finally (return i))))
@@ -710,7 +710,7 @@ by  -  byte
 	   (bv-target (bv-from-s "a;admin=true;aaa"))
 	   (bv-edit (bv-xor (bv-xor bv-userdata bv-target) (subseq bv-ctext 16 32))))
       (ch16-check bv-ctext bv-iv bv-key)
-      (ch16-check (bv-cat (subseq bv-ctext 0 16) bv-edit (subseq bv-ctext 32))
+      (ch16-check (v-cat (subseq bv-ctext 0 16) bv-edit (subseq bv-ctext 32))
 		  bv-iv
 		  bv-key))))
 
@@ -748,18 +748,18 @@ by  -  byte
 	       (for bv-cur-iv previous bv-cur-block initially bv-iv)
 	       (collecting (bv-cbc-padding-block bv-cur-block bv-cur-iv bv-key)
 			   into lst-res)
-	       (finally (return (s-from-bv (bv-pkcs7-unpad (apply #'bv-cat lst-res) 16))))))))
+	       (finally (return (s-from-bv (bv-pkcs7-unpad (apply #'v-cat lst-res) 16))))))))
 
 (defun bv-cbc-padding-block (bv-block bv-iv bv-key)
   (iterate (for i from 1 to 16)
 	   (with bv-mask-suffix = #())
 	   (for by-cur =
 		(iterate (for n from 0 to 255)
-			 (for bv-xor-mask = (bv-cat 
+			 (for bv-xor-mask = (v-cat 
 							 (bv-make (- 16 i) 0)
 							 #(n)
 							 bv-mask-suffix))
-			 (until (ch17-oracle (bv-cat bv-xor-mask bv-block)
+			 (until (ch17-oracle (v-cat bv-xor-mask bv-block)
 					     bv-iv
 					     bv-key))
 			 (finally (return (logxor n i (elt bv-iv (- 16 i)))))))
@@ -776,14 +776,13 @@ by  -  byte
 ;18. Implement CTR, the stream cipher mode
 
 (defun bv-aes-ctr-encrypt (bv-msg bv-nonce bv-key)
-  (print (length bv-key))
   (iterate (for i from 0 to (ceiling (length bv-msg) 16))
 	   (for bv-counter = (bv-from-in i))
-	   (for bv-nonce-counter = (bv-cat bv-nonce
+	   (for bv-nonce-counter = (v-cat bv-nonce
 					   bv-counter
 					   (bv-make (- 8 (length bv-counter)))))
 	   (collecting (bv-aes-encrypt bv-nonce-counter bv-key) into lst-res)
-	   (finally (return (bv-xor bv-msg (apply #'bv-cat lst-res))))))
+	   (finally (return (bv-xor bv-msg (apply #'v-cat lst-res))))))
 
 (defun s-aes-ctr-encrypt (s-msg s-nonce s-key)
   (let ((bv-msg (bv-from-s s-msg))
@@ -943,3 +942,40 @@ by  -  byte
 	 (clone-MT (MT-clone u32v-output)))
     (is (funcall clone-MT)
 	(funcall orig-MT))))
+
+
+;24. Create the MT19937 stream cipher and break it
+
+;note that while this uses a 16bit key, and is therefore trivially breakable on my laptop,
+;MT19937 only admits a 32bit seed, which is still easy to brute force.
+
+(defun bv-MT-encrypt (bv-msg u32-key)
+  (let ((rng (MT-init u32-key)))
+    (iterate (for bv-cur-msg in (subdivide bv-msg 4))
+	     (for bv-cur-key next (bv-from-in (funcall rng)))
+	     (collecting (bv-xor bv-cur-msg bv-cur-key) into lst-res)
+	     (finally (return (apply #'v-cat lst-res))))))
+
+(let ((bv-test (bv-rand 10))
+      (u32-key (random (expt 2 32))))
+  (ok (equalp  (bv-MT-encrypt (bv-MT-encrypt bv-test u32-key) u32-key)
+	       bv-test)
+      "bv-MT-encrypt"))
+
+(defun ch24-encrypt ()
+  (let ((u32-key (random (expt 2 16)))
+	(bv-msg (v-cat (bv-rand (+ 50 (random 100))) (bv-make 16 65))))
+    (values (bv-MT-encrypt bv-msg u32-key) u32-key)))
+
+(defun n-last (seq n)
+  (subseq seq (- (length seq) n))) 
+
+(defun ch24-crack (bv-ctext)
+  (iterate (for u32-cand-key from 0 to (expt 2 16))
+	   (for bv-cand-ptext = (bv-MT-encrypt bv-ctext u32-cand-key))
+	   (until (equalp (n-last bv-cand-ptext 16) (bv-make 16 65)))
+	   (finally (return u32-cand-key))))
+
+(multiple-value-bind (bv-ctext u32-key) (ch24-encrypt)
+  (is (ch24-crack bv-ctext)
+      u32-key))
